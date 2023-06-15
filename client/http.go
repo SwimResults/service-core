@@ -36,6 +36,7 @@ func Get(url string, path string, params map[string]string) (*http.Response, err
 	for key, value := range params {
 		q.Add(key, value)
 	}
+	r.URL.RawQuery = q.Encode()
 	client := &http.Client{}
 	res, err := client.Do(r)
 	if err != nil {
