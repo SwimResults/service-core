@@ -25,3 +25,11 @@ func Post(url string, path string, data interface{}) (*http.Response, error) {
 
 	return res, nil
 }
+
+func Get(url string, path string) (*http.Response, error) {
+	res, err := http.Get(url + path)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
