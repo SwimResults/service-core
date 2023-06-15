@@ -26,10 +26,21 @@ func Post(url string, path string, data interface{}) (*http.Response, error) {
 	return res, nil
 }
 
-func Get(url string, path string) (*http.Response, error) {
-	res, err := http.Get(url + path)
+func Get(url string, path string, params map[string]string) (*http.Response, error) {
+	r, err := http.NewRequest("GET", url+path, nil)
 	if err != nil {
 		return nil, err
 	}
+
+	q := r.URL.Query()
+	for key, value := range params {
+		q.Add(key, value)
+	}
+	client := &http.Client{}
+	res, err := client.Do(r)
+	if err != nil {
+		return nil, err
+	}
+
 	return res, nil
 }
