@@ -6,7 +6,31 @@ func Aliasify(text string) string {
 	text = strings.ToLower(text)
 	text = strings.ReplaceAll(text, " ", "")
 
-	// TODO: handle special characters
+	replacements := map[string]string{
+		"ß": "ss",
+		"-": "",
+		".": "",
+
+		"ä": "ae",
+		"ö": "oe",
+		"ü": "ue",
+
+		"é": "e",
+		"è": "e",
+		"ê": "e",
+
+		"à": "a",
+		"á": "a",
+		"â": "a",
+
+		"ò": "o",
+		"ó": "o",
+		"ô": "o",
+	}
+
+	for a, b := range replacements {
+		text = strings.ReplaceAll(text, a, b)
+	}
 
 	return text
 }
