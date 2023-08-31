@@ -20,3 +20,9 @@ func TestAliasifyLarge(t *testing.T) {
 	s2 := Aliasify(s1)
 	assert.Equal(t, "fhweuifeeeeeeeeeeeeeegheggegelrgergsssssseessssss", s2)
 }
+
+func TestAliasifyRegexReplacement(t *testing.T) {
+	s1 := "Konradß @%Wèi$$ß"
+	s2 := Aliasify(s1)
+	assert.Equal(t, "konradssweiss", s2)
+}
