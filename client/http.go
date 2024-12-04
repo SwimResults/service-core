@@ -15,7 +15,9 @@ func Post(url string, path string, data interface{}, header *http.Header) (*http
 	if err != nil {
 		return nil, err
 	}
-	r.Header = *header
+	if header != nil {
+		r.Header = *header
+	}
 	r.Header.Add("Content-Type", "application/json")
 
 	client := &http.Client{}
@@ -32,7 +34,10 @@ func Get(url string, path string, params map[string]string, header *http.Header)
 	if err != nil {
 		return nil, err
 	}
-	r.Header = *header
+
+	if header != nil {
+		r.Header = *header
+	}
 
 	q := r.URL.Query()
 	for key, value := range params {
