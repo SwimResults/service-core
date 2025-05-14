@@ -2,7 +2,10 @@ module github.com/swimresults/service-core
 
 go 1.18
 
-require github.com/stretchr/testify v1.8.4
+require (
+	github.com/stretchr/testify v1.8.4
+	go.mongodb.org/mongo-driver v1.17.3
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
