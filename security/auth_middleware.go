@@ -11,9 +11,8 @@ import (
 
 // AuthMiddlewareConfig holds configuration for authorization
 type AuthMiddlewareConfig struct {
-	ServiceKey      string
-	ExcludedPaths   []string          // Paths that don't require authorization
-	MeetingIDFields map[string]string // endpoint patterns -> param names (e.g., "/start" -> "meet_id")
+	ServiceKey    string   // Shared key for service-to-service communication
+	ExcludedPaths []string // Paths that don't require authorization
 }
 
 // RequiredPermission specifies what permission is needed
@@ -38,6 +37,11 @@ func AuthMiddleware() gin.HandlerFunc {
 		if config == nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "authorization middleware not initialized"})
 			c.Abort()
+			return
+		}
+
+		if isExcludedPath(c.Request.URL.Path) {
+			c.Next()
 			return
 		}
 
@@ -93,6 +97,20 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func isExcludedPath(path string) bool {
+	for _, excludedPath := range config.ExcludedPaths {
+		if excludedPath == "" {
+			continue
+		}
+
+		if path == excludedPath || strings.HasPrefix(path, excludedPath+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isServiceRequest checks if the request is from another service using SR_SERVICE_KEY
