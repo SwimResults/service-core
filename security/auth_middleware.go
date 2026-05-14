@@ -26,9 +26,31 @@ const (
 
 var config *AuthMiddlewareConfig
 
+// endpointPermissions maps endpoint paths to their required permissions
+// Format: "METHOD /path" -> RequiredPermission
+var endpointPermissions = make(map[string]RequiredPermission)
+
 // InitAuthMiddleware initializes the auth middleware with configuration
 func InitAuthMiddleware(cfg *AuthMiddlewareConfig) {
 	config = cfg
+}
+
+// RegisterEndpoint registers an endpoint with its required permission level
+// pathPattern: "/users", "/users/:id", "/meetings/:meet_id", etc.
+// method: "GET", "POST", "PUT", "DELETE", "PATCH"
+// permission: PermissionPublic, PermissionAdmin, or PermissionMeeting
+func RegisterEndpoint(method string, pathPattern string, permission RequiredPermission) {
+	key := fmt.Sprintf("%s %s", method, pathPattern)
+	endpointPermissions[key] = permission
+}
+
+// RegisterEndpoints registers multiple endpoints at once
+func RegisterEndpoints(endpoints map[string]map[string]RequiredPermission) {
+	for method, paths := range endpoints {
+		for path, permission := range paths {
+			RegisterEndpoint(method, path, permission)
+		}
+	}
 }
 
 // AuthMiddleware is the Gin middleware that enforces authorization
@@ -53,8 +75,17 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// GET, HEAD requests are allowed for everyone without token
-		if method == http.MethodGet || method == http.MethodHead {
+		// Check if this endpoint has explicit permission requirements
+		permission := getEndpointPermission(method, c.Request.URL.Path)
+
+		// PermissionPublic doesn't require auth or service key
+		if permission == PermissionPublic {
+			c.Next()
+			return
+		}
+
+		// GET, HEAD requests without explicit PermissionAdmin/PermissionMeeting requirement are public
+		if permission == "" && (method == http.MethodGet || method == http.MethodHead) {
 			c.Next()
 			return
 		}
@@ -65,7 +96,7 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// For data-modifying requests, check token
+		// For data-modifying requests or admin endpoints, check token
 		claims, err := extractAndValidateToken(c)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
@@ -77,21 +108,40 @@ func AuthMiddleware() gin.HandlerFunc {
 		c.Set("keycloak_claims", claims)
 		c.Set("user_id", claims.Subject)
 
-		// Check authorization based on endpoint type
-		meetingID := extractMeetingIDFromRequest(c)
-		if meetingID != "" {
-			// This is a meeting-specific endpoint
+		// Check authorization based on endpoint permission
+		switch permission {
+		case PermissionAdmin:
+			if !claims.HasRole("admin") {
+				c.JSON(http.StatusForbidden, gin.H{"error": "admin role required for this operation"})
+				c.Abort()
+				return
+			}
+
+		case PermissionMeeting:
+			meetingID := extractMeetingIDFromRequest(c)
 			if !isAuthorizedForMeeting(claims, meetingID) {
 				c.JSON(http.StatusForbidden, gin.H{"error": "insufficient permissions for this meeting"})
 				c.Abort()
 				return
 			}
-		} else {
-			// General endpoint - requires admin role
-			if !claims.HasRole("admin") {
-				c.JSON(http.StatusForbidden, gin.H{"error": "admin role required for this operation"})
-				c.Abort()
-				return
+
+		default:
+			// Backward compatibility: if no explicit permission and not a safe method,
+			// check for meeting-specific endpoint
+			meetingID := extractMeetingIDFromRequest(c)
+			if meetingID != "" {
+				if !isAuthorizedForMeeting(claims, meetingID) {
+					c.JSON(http.StatusForbidden, gin.H{"error": "insufficient permissions for this meeting"})
+					c.Abort()
+					return
+				}
+			} else {
+				// General endpoint - requires admin role
+				if !claims.HasRole("admin") {
+					c.JSON(http.StatusForbidden, gin.H{"error": "admin role required for this operation"})
+					c.Abort()
+					return
+				}
 			}
 		}
 
@@ -111,6 +161,60 @@ func isExcludedPath(path string) bool {
 	}
 
 	return false
+}
+
+// getEndpointPermission looks up the required permission for an endpoint
+// Returns empty string if no explicit permission is registered
+func getEndpointPermission(method string, path string) RequiredPermission {
+	// Try exact match first
+	key := fmt.Sprintf("%s %s", method, path)
+	if permission, exists := endpointPermissions[key]; exists {
+		return permission
+	}
+
+	// Try to match path patterns (for routes with parameters like /users/:id)
+	// This is a simple prefix match - in production, use proper route matching
+	for registeredKey, permission := range endpointPermissions {
+		parts := strings.Split(registeredKey, " ")
+		if len(parts) != 2 {
+			continue
+		}
+		registeredMethod, registeredPath := parts[0], parts[1]
+
+		if registeredMethod != method {
+			continue
+		}
+
+		// Check if path matches pattern (simple version - checks if pattern matches)
+		if pathMatches(registeredPath, path) {
+			return permission
+		}
+	}
+
+	return ""
+}
+
+// pathMatches checks if a pattern like "/users/:id" matches a path like "/users/123"
+func pathMatches(pattern string, path string) bool {
+	patternParts := strings.Split(pattern, "/")
+	pathParts := strings.Split(path, "/")
+
+	if len(patternParts) != len(pathParts) {
+		return false
+	}
+
+	for i, patPart := range patternParts {
+		// Parameters like :id or :meet_id match anything
+		if strings.HasPrefix(patPart, ":") {
+			continue
+		}
+		// Literal parts must match exactly
+		if patPart != pathParts[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // isServiceRequest checks if the request is from another service using SR_SERVICE_KEY
