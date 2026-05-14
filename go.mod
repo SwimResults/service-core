@@ -1,9 +1,12 @@
 module github.com/swimresults/service-core
 
-go 1.18
+go 1.24
 
 require (
-	github.com/stretchr/testify v1.8.4
+	github.com/gin-gonic/gin v1.10.1
+	github.com/golang-jwt/jwt/v5 v5.2.2
+	github.com/sirupsen/logrus v1.9.3
+	github.com/stretchr/testify v1.9.0
 	go.mongodb.org/mongo-driver v1.17.3
 )
 
