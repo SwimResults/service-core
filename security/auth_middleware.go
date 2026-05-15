@@ -1,7 +1,10 @@
 package security
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -304,8 +307,16 @@ func extractMeetingIDFromRequest(c *gin.Context) string {
 	}
 
 	// Check JSON body for meeting-related fields
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil || len(rawBody) == 0 {
+		return ""
+	}
+
+	// Restore the body so downstream handlers can still bind JSON.
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(rawBody))
+
 	var body map[string]interface{}
-	if err := c.BindJSON(&body); err == nil {
+	if err := json.Unmarshal(rawBody, &body); err == nil {
 		if meetID, ok := body["meet_id"].(string); ok && meetID != "" {
 			return meetID
 		}
