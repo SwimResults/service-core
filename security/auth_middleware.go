@@ -53,6 +53,13 @@ func RegisterEndpoints(endpoints map[string]map[string]RequiredPermission) {
 	}
 }
 
+// Route registers a Gin route and binds the permission to the same path definition.
+// This keeps the path string in one place and avoids a separate permission registry.
+func Route(router gin.IRoutes, method string, path string, permission RequiredPermission, handlers ...gin.HandlerFunc) gin.IRoutes {
+	RegisterEndpoint(method, path, permission)
+	return router.Handle(method, path, handlers...)
+}
+
 // AuthMiddleware is the Gin middleware that enforces authorization
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
