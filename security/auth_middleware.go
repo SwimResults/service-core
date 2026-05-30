@@ -128,7 +128,12 @@ func AuthMiddleware() gin.HandlerFunc {
 			}
 
 		case PermissionMeeting:
-			meetingID := extractMeetingIDFromRequest(c)
+			meetingID, err := extractMeetingIDFromRequest(c)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				c.Abort()
+				return
+			}
 			if !isAuthorizedForMeeting(claims, meetingID) {
 				c.JSON(http.StatusForbidden, gin.H{"error": "insufficient permissions for this meeting"})
 				c.Abort()
@@ -138,7 +143,12 @@ func AuthMiddleware() gin.HandlerFunc {
 		default:
 			// Backward compatibility: if no explicit permission and not a safe method,
 			// check for meeting-specific endpoint
-			meetingID := extractMeetingIDFromRequest(c)
+			meetingID, err := extractMeetingIDFromRequest(c)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				c.Abort()
+				return
+			}
 			if meetingID != "" {
 				if !isAuthorizedForMeeting(claims, meetingID) {
 					c.JSON(http.StatusForbidden, gin.H{"error": "insufficient permissions for this meeting"})
@@ -281,54 +291,60 @@ func isAuthorizedForMeeting(claims *KeycloakClaims, meetingID string) bool {
 	return false
 }
 
-// extractMeetingIDFromRequest tries to find meeting ID in the request
-// This is a helper that works with common patterns
-func extractMeetingIDFromRequest(c *gin.Context) string {
-	// Check URL parameters first (most common)
-	if meetID := c.Param("meet_id"); meetID != "" {
-		return meetID
-	}
-	if meetID := c.Param("meetid"); meetID != "" {
-		return meetID
-	}
-	if meetID := c.Param("meeting"); meetID != "" {
-		return meetID
+// extractMeetingIDFromRequest tries to find a meeting ID without letting one source override another.
+func extractMeetingIDFromRequest(c *gin.Context) (string, error) {
+	var candidates []string
+
+	addCandidate := func(value string) {
+		if value != "" {
+			candidates = append(candidates, value)
+		}
 	}
 
-	// Check query parameters
-	if meetID := c.Query("meet_id"); meetID != "" {
-		return meetID
-	}
-	if meetID := c.Query("meetid"); meetID != "" {
-		return meetID
-	}
-	if meetID := c.Query("meeting"); meetID != "" {
-		return meetID
-	}
+	// URL parameters are the strongest signal.
+	addCandidate(c.Param("meet_id"))
+	addCandidate(c.Param("meetid"))
+	addCandidate(c.Param("meeting"))
 
-	// Check JSON body for meeting-related fields
+	// Query parameters are still supported, but they must agree with other sources.
+	addCandidate(c.Query("meet_id"))
+	addCandidate(c.Query("meetid"))
+	addCandidate(c.Query("meeting"))
+
+	// Check JSON body for meeting-related fields without consuming it for downstream handlers.
 	rawBody, err := io.ReadAll(c.Request.Body)
-	if err != nil || len(rawBody) == 0 {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("unable to read request body: %v", err)
+	}
+	if len(rawBody) > 0 {
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(rawBody))
+
+		var body map[string]interface{}
+		if err := json.Unmarshal(rawBody, &body); err == nil {
+			if meetID, ok := body["meet_id"].(string); ok && meetID != "" {
+				addCandidate(meetID)
+			}
+			if meetID, ok := body["meetid"].(string); ok && meetID != "" {
+				addCandidate(meetID)
+			}
+			if meetID, ok := body["meeting"].(string); ok && meetID != "" {
+				addCandidate(meetID)
+			}
+		}
 	}
 
-	// Restore the body so downstream handlers can still bind JSON.
-	c.Request.Body = io.NopCloser(bytes.NewBuffer(rawBody))
+	if len(candidates) == 0 {
+		return "", nil
+	}
 
-	var body map[string]interface{}
-	if err := json.Unmarshal(rawBody, &body); err == nil {
-		if meetID, ok := body["meet_id"].(string); ok && meetID != "" {
-			return meetID
-		}
-		if meetID, ok := body["meetid"].(string); ok && meetID != "" {
-			return meetID
-		}
-		if meetID, ok := body["meeting"].(string); ok && meetID != "" {
-			return meetID
+	meetingID := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if candidate != meetingID {
+			return "", fmt.Errorf("conflicting meeting identifiers in request")
 		}
 	}
 
-	return ""
+	return meetingID, nil
 }
 
 // GetKeycloakClaims retrieves claims from context
