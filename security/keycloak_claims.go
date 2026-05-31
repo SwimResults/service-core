@@ -7,6 +7,7 @@ import (
 // KeycloakClaims represents the structure of a Keycloak JWT token
 type KeycloakClaims struct {
 	jwt.RegisteredClaims
+	Scope       string `json:"scope"`
 	RealmAccess struct {
 		Roles []string `json:"roles"`
 	} `json:"realm_access"`

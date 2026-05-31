@@ -1,11 +1,13 @@
 package security
 
 import (
-	"bytes"
-	"encoding/json"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -14,8 +16,9 @@ import (
 
 // AuthMiddlewareConfig holds configuration for authorization
 type AuthMiddlewareConfig struct {
-	ServiceKey    string   // Shared key for service-to-service communication
-	ExcludedPaths []string // Paths that don't require authorization
+	ServiceKey     string   // Shared key for service-to-service communication
+	ExcludedPaths  []string // Paths that don't require authorization
+	TokenPublicKey string   // Keycloak public key in PEM or base64-encoded PKIX format
 }
 
 // RequiredPermission specifies what permission is needed
@@ -35,6 +38,12 @@ var endpointPermissions = make(map[string]RequiredPermission)
 
 // InitAuthMiddleware initializes the auth middleware with configuration
 func InitAuthMiddleware(cfg *AuthMiddlewareConfig) {
+	if cfg != nil && cfg.TokenPublicKey == "" {
+		cfg.TokenPublicKey = strings.TrimSpace(os.Getenv("SR_JWT_PUBLIC_KEY"))
+		if cfg.TokenPublicKey == "" {
+			cfg.TokenPublicKey = strings.TrimSpace(os.Getenv("SR_KEYCLOAK_PUBLIC_KEY"))
+		}
+	}
 	config = cfg
 }
 
@@ -250,6 +259,11 @@ func isServiceRequest(c *gin.Context) bool {
 // extractAndValidateToken extracts JWT from Authorization header and validates it
 func extractAndValidateToken(c *gin.Context) (*KeycloakClaims, error) {
 	authHeader := c.GetHeader("Authorization")
+	return ValidateAuthorizationHeader(authHeader)
+}
+
+// ValidateAuthorizationHeader parses and validates a bearer token using the configured public key.
+func ValidateAuthorizationHeader(authHeader string) (*KeycloakClaims, error) {
 	if authHeader == "" {
 		return nil, fmt.Errorf("missing authorization header")
 	}
@@ -259,21 +273,70 @@ func extractAndValidateToken(c *gin.Context) (*KeycloakClaims, error) {
 		return nil, fmt.Errorf("invalid authorization header format")
 	}
 
-	tokenString := parts[1]
-
-	// Parse without verification (API Gateway handles verification)
-	// In production, you might want to verify the token signature
-	token, _, err := jwt.NewParser().ParseUnverified(tokenString, &KeycloakClaims{})
+	publicKey, err := resolveTokenPublicKey()
 	if err != nil {
-		return nil, fmt.Errorf("invalid token format: %v", err)
+		return nil, err
 	}
 
-	claims, ok := token.Claims.(*KeycloakClaims)
-	if !ok {
-		return nil, fmt.Errorf("invalid token claims")
+	claims := &KeycloakClaims{}
+	token, err := jwt.ParseWithClaims(
+		parts[1],
+		claims,
+		func(token *jwt.Token) (interface{}, error) {
+			if token.Method.Alg() != jwt.SigningMethodRS256.Alg() {
+				return nil, fmt.Errorf("unexpected signing method: %s", token.Method.Alg())
+			}
+			return publicKey, nil
+		},
+		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("invalid token: %v", err)
+	}
+	if token == nil || !token.Valid {
+		return nil, fmt.Errorf("invalid token")
 	}
 
 	return claims, nil
+}
+
+func resolveTokenPublicKey() (*rsa.PublicKey, error) {
+	if config == nil {
+		return nil, fmt.Errorf("authorization middleware not initialized")
+	}
+
+	keyMaterial := strings.TrimSpace(config.TokenPublicKey)
+	if keyMaterial == "" {
+		return nil, fmt.Errorf("token verification key not configured")
+	}
+
+	if block, _ := pem.Decode([]byte(keyMaterial)); block != nil {
+		parsedKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("invalid token public key: %v", err)
+		}
+		publicKey, ok := parsedKey.(*rsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("token public key is not rsa")
+		}
+		return publicKey, nil
+	}
+
+	decodedKey, err := base64.StdEncoding.DecodeString(keyMaterial)
+	if err != nil {
+		return nil, fmt.Errorf("invalid token public key encoding: %v", err)
+	}
+
+	parsedKey, err := x509.ParsePKIXPublicKey(decodedKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid token public key: %v", err)
+	}
+	publicKey, ok := parsedKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("token public key is not rsa")
+	}
+
+	return publicKey, nil
 }
 
 // isAuthorizedForMeeting checks if user has admin role or manager role with meeting access
@@ -305,33 +368,6 @@ func extractMeetingIDFromRequest(c *gin.Context) (string, error) {
 	addCandidate(c.Param("meet_id"))
 	addCandidate(c.Param("meetid"))
 	addCandidate(c.Param("meeting"))
-
-	// Query parameters are still supported, but they must agree with other sources.
-	addCandidate(c.Query("meet_id"))
-	addCandidate(c.Query("meetid"))
-	addCandidate(c.Query("meeting"))
-
-	// Check JSON body for meeting-related fields without consuming it for downstream handlers.
-	rawBody, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		return "", fmt.Errorf("unable to read request body: %v", err)
-	}
-	if len(rawBody) > 0 {
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(rawBody))
-
-		var body map[string]interface{}
-		if err := json.Unmarshal(rawBody, &body); err == nil {
-			if meetID, ok := body["meet_id"].(string); ok && meetID != "" {
-				addCandidate(meetID)
-			}
-			if meetID, ok := body["meetid"].(string); ok && meetID != "" {
-				addCandidate(meetID)
-			}
-			if meetID, ok := body["meeting"].(string); ok && meetID != "" {
-				addCandidate(meetID)
-			}
-		}
-	}
 
 	if len(candidates) == 0 {
 		return "", nil
