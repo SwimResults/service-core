@@ -4,7 +4,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
 )
+
+const serviceHeader = "X-Swimresults-Service"
+
+func applyHeaders(r *http.Request, header *http.Header) {
+	if header != nil {
+		for key, values := range *header {
+			for _, value := range values {
+				r.Header.Add(key, value)
+			}
+		}
+	}
+
+	if key := os.Getenv("SR_SERVICE_KEY"); key != "" {
+		r.Header.Set(serviceHeader, key)
+	}
+}
 
 func Post(url string, path string, data interface{}, header *http.Header) (*http.Response, error) {
 	b, err := json.Marshal(data)
@@ -15,9 +32,7 @@ func Post(url string, path string, data interface{}, header *http.Header) (*http
 	if err != nil {
 		return nil, err
 	}
-	if header != nil {
-		r.Header = *header
-	}
+	applyHeaders(r, header)
 	r.Header.Add("Content-Type", "application/json")
 
 	client := &http.Client{}
@@ -34,10 +49,7 @@ func Get(url string, path string, params map[string]string, header *http.Header)
 	if err != nil {
 		return nil, err
 	}
-
-	if header != nil {
-		r.Header = *header
-	}
+	applyHeaders(r, header)
 
 	q := r.URL.Query()
 	for key, value := range params {
