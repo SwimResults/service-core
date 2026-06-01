@@ -1,11 +1,14 @@
 package security
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -368,6 +371,33 @@ func extractMeetingIDFromRequest(c *gin.Context) (string, error) {
 	addCandidate(c.Param("meet_id"))
 	addCandidate(c.Param("meetid"))
 	addCandidate(c.Param("meeting"))
+
+	// Query parameters are still supported, but they must agree with other sources.
+	addCandidate(c.Query("meet_id"))
+	addCandidate(c.Query("meetid"))
+	addCandidate(c.Query("meeting"))
+
+	// Check JSON body for meeting-related fields without consuming it for downstream handlers.
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return "", fmt.Errorf("unable to read request body: %v", err)
+	}
+	if len(rawBody) > 0 {
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(rawBody))
+
+		var body map[string]interface{}
+		if err := json.Unmarshal(rawBody, &body); err == nil {
+			if meetID, ok := body["meet_id"].(string); ok && meetID != "" {
+				addCandidate(meetID)
+			}
+			if meetID, ok := body["meetid"].(string); ok && meetID != "" {
+				addCandidate(meetID)
+			}
+			if meetID, ok := body["meeting"].(string); ok && meetID != "" {
+				addCandidate(meetID)
+			}
+		}
+	}
 
 	if len(candidates) == 0 {
 		return "", nil
