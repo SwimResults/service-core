@@ -30,6 +30,7 @@ type RequiredPermission string
 const (
 	PermissionPublic  RequiredPermission = "public"  // No auth required
 	PermissionAdmin   RequiredPermission = "admin"   // Admin role required
+	PermissionManager RequiredPermission = "manager" // Manager role meeting independent access
 	PermissionMeeting RequiredPermission = "meeting" // Admin or Manager with meeting access
 )
 
@@ -135,6 +136,13 @@ func AuthMiddleware() gin.HandlerFunc {
 		case PermissionAdmin:
 			if !claims.HasRole("admin") {
 				c.JSON(http.StatusForbidden, gin.H{"error": "admin role required for this operation"})
+				c.Abort()
+				return
+			}
+
+		case PermissionManager:
+			if !isAuthorizedForManager(claims) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "manager role required for this operation"})
 				c.Abort()
 				return
 			}
@@ -340,6 +348,21 @@ func resolveTokenPublicKey() (*rsa.PublicKey, error) {
 	}
 
 	return publicKey, nil
+}
+
+// isAuthorizedForManager checks if user has admin role or manager role
+func isAuthorizedForManager(claims *KeycloakClaims) bool {
+	// Admin can do everything
+	if claims.HasRole("admin") {
+		return true
+	}
+
+	// Manager can do everything
+	if claims.HasRole("manager") {
+		return true
+	}
+
+	return false
 }
 
 // isAuthorizedForMeeting checks if user has admin role or manager role with meeting access
